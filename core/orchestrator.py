@@ -33,24 +33,18 @@ class AgentState(Enum):
 class Orchestrator:
     """Core orchestrator for Autobot with dual AI functionality."""
 
-    def __init__(self, project):
+    def __init__(self, project=None):
         """
         Initialize the orchestrator.
 
         Args:
-            project: Project instance
+            project: Project instance, optional. If None, orchestrator starts without a project.
         """
         self.project = project
 
         # Initialize LLM interfaces - one for user interaction, one for background tasks
         self.user_llm_interface = LLMInterface()
         self.task_llm_interface = LLMInterface()
-
-        # Initialize components
-        self.memory_manager = MemoryManager(project, self.task_llm_interface)
-        self.planning_module = PlanningModule(project, self.task_llm_interface)
-        self.execution_engine = TaskExecutionEngine(project, self.memory_manager, self.task_llm_interface)
-        self.reflection_module = ReflectionModule(project, self.memory_manager, self.task_llm_interface)
 
         # Initialize state
         self.state = AgentState.IDLE
@@ -65,13 +59,79 @@ class Orchestrator:
         # Initialize work logs for the task AI
         self.work_logs = []
 
-        logger.info(f"Orchestrator initialized for project: {project.name}")
+        # Initialize components only if project is provided
+        if project:
+            self._initialize_project_components(project)
+            logger.info(f"Orchestrator initialized for project: {project.name}")
+        else:
+            # Initialize with empty/placeholder components
+            self.memory_manager = None
+            self.planning_module = None
+            self.execution_engine = None
+            self.reflection_module = None
+            logger.info("Orchestrator initialized without a project")
+
+    def _initialize_project_components(self, project):
+        """
+        Initialize project-specific components.
+
+        Args:
+            project: Project instance
+        """
+        # Initialize components
+        self.memory_manager = MemoryManager(project, self.task_llm_interface)
+        self.planning_module = PlanningModule(project, self.task_llm_interface)
+        self.execution_engine = TaskExecutionEngine(project, self.memory_manager, self.task_llm_interface)
+        self.reflection_module = ReflectionModule(project, self.memory_manager, self.task_llm_interface)
+
+    def set_project(self, project):
+        """
+        Set or change the current project.
+
+        Args:
+            project: Project instance
+        """
+        self.project = project
+        self._initialize_project_components(project)
+        logger.info(f"Project set to: {project.name}")
+
+        # Reset state
+        self.state = AgentState.WAITING_FOR_USER
+        self.current_task = None
+        self.last_result = None
+
+        # Clear work logs
+        self.work_logs = []
 
     def run(self):
         """Run the main agent loop."""
         self.running = True
 
         logger.info("Starting agent loop")
+
+        # If no project is set, just wait for user input
+        if not self.project:
+            self.state = AgentState.WAITING_FOR_USER
+            logger.info("No project set, waiting for user input")
+
+            # Main loop just for checking messages
+            while self.running:
+                try:
+                    # Check for user messages
+                    self._check_user_messages()
+
+                    # Just wait for user input
+                    if self.state == AgentState.SHUTDOWN:
+                        self.running = False
+
+                    # Small sleep to prevent CPU hogging
+                    time.sleep(0.1)
+
+                except Exception as e:
+                    logger.error(f"Error in agent loop: {str(e)}")
+                    time.sleep(5)  # Wait a bit before retrying
+
+            return
 
         # Create initial plan if needed
         if not os.path.exists(self.project.plan_path) or os.path.getsize(self.project.plan_path) == 0:
@@ -126,8 +186,12 @@ class Orchestrator:
         Returns:
             int: Message ID
         """
-        # Add message to memory
-        message_id = self.memory_manager.add_message(sender, message)
+        # Generate a simple message ID if no memory manager
+        if not self.memory_manager:
+            message_id = int(time.time() * 1000)  # Use timestamp as ID
+        else:
+            # Add message to memory
+            message_id = self.memory_manager.add_message(sender, message)
 
         # Add to appropriate queue for processing
         if message_type == "user_chat":
@@ -170,6 +234,14 @@ class Orchestrator:
         Returns:
             Dict[str, Any]: Status information
         """
+        if not self.project:
+            return {
+                "state": self.state.value,
+                "current_task": None,
+                "project": "",
+                "goal": ""
+            }
+
         return {
             "state": self.state.value,
             "current_task": self.current_task,
@@ -232,6 +304,24 @@ class Orchestrator:
         """
         cmd = command.lower().strip()
 
+        # Handle case when no project is set
+        if not self.project:
+            if cmd == "/help":
+                help_text = (
+                    "Available commands:\n"
+                    "/status - Get current agent status\n"
+                    "/help - Show this help message\n\n"
+                    "Note: Most commands require a project to be selected first."
+                )
+                self.send_message(help_text, "autobot")
+            elif cmd == "/status":
+                status = self.get_status()
+                self.send_message(f"Current status: {status}\n\nNo project is currently selected.", "autobot")
+            else:
+                self.send_message("No project is currently selected. Please select or create a project first.", "autobot")
+            return
+
+        # Commands that require a project
         if cmd == "/stop" or cmd == "/pause":
             logger.info("Pausing agent - changing state to WAITING_FOR_USER")
             self.state = AgentState.WAITING_FOR_USER
@@ -249,6 +339,10 @@ class Orchestrator:
             self.send_message(f"Current status: {status}", "autobot")
 
         elif cmd == "/plan":
+            if not self.planning_module:
+                self.send_message("Planning module not initialized. Please select a project first.", "autobot")
+                return
+
             plan = self.planning_module.get_current_plan()
             self.send_message(f"Current plan:\n\n{plan}", "autobot")
 
@@ -288,7 +382,30 @@ class Orchestrator:
         Args:
             user_message (str): User message
         """
-        # Construct prompt
+        # Handle case when no project is set
+        if not self.project or not self.memory_manager:
+            # Simple response when no project is set
+            system_prompt = (
+                "You are Autobot's user interaction AI. You are designed to help users by providing friendly and helpful responses. "
+                "No project is currently selected. You can help the user select or create a project. "
+                "Provide a helpful response to the user's message."
+            )
+
+            # Simple prompt without memory manager
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ]
+
+            # Generate response using the user interaction AI
+            response = self.user_llm_interface.generate(messages)
+            content = response["choices"][0]["message"]["content"]
+
+            # Send response to the user chat
+            self.send_message(content, "user_ai", "user_chat")
+            return
+
+        # Construct prompt with memory manager
         messages = self.memory_manager.construct_prompt(
             system_prompt=(
                 "You are Autobot's user interaction AI. You are designed to help users by providing friendly and helpful responses. "

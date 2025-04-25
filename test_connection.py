@@ -48,9 +48,9 @@ def main():
     server_running = check_server_status()
 
     if not server_running:
-        print("\nStarting FastAPI server...")
+        print("\nStarting FastAPI server with uvicorn...")
         server_process = subprocess.Popen(
-            [sys.executable, "main.py", "--debug"],
+            [sys.executable, "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True

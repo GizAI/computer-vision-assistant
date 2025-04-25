@@ -10,7 +10,7 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { onMounted } from "vue";
 import { useAutobotStore } from "./stores/autobot";
 import Sidebar from "./components/Sidebar.vue";

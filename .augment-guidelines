@@ -1,0 +1,43 @@
+# Guidelines
+
+## Core Principles
+
+- Communicate with users in Korean, write code and docs in English.
+- Operate 24/7 autonomously without human intervention.
+- Fix root causes, not symptoms or with workarounds.
+- Prioritize code simplicity, avoid unnecessary complexity.
+- Check for related code before coding to prevent duplication, regularly review and refactor.
+- Use the latest known stable versions of libraries and follow best practices.
+- Use lucide-svelte for icons, not svg. If you see svg icons, change them to lucide-svelte.
+- Don't test or turn the server off and on only when explicitly requested by the user.
+- For feature E2E tests, use `playwright` with `--reporter list`, capture screenshots automatically, and verify them with AI.
+- Exclude `node_modules` and other unnecessary folders when searching code, search both filenames and content.
+- Focus on core feature implementation first.
+- Keep documentation concise and token-efficient.
+
+## Project Management
+
+- Store documentation in docs directory (todo.md, plan.md)
+- Update GitHub: Update git with appropriate commit logs
+- Task details: ID, title, description, priority(P0-P3), status, effort
+- Workflow: Plan → Implement → Test → Review → Complete
+
+## Development Practices
+
+- Use non-interactive command flags (e.g., -y)
+- Continuously monitor server status, check browser console errors
+- Configure API endpoints for remote access
+
+## Testing & Automation
+
+- Automate API/UI testing (Playwright)
+- Verify login functionality, page rendering
+- Avoid test code duplication, use modern testing methods
+- Immediately reflect changes for real-time browser verification
+
+## Version Control
+
+- Run tests before committing
+- Use descriptive commit messages: feat, fix, docs, refactor, test
+- Flow: test → implement → test → commit
+- When using find command, exclude node_modules and other unnecessary directories

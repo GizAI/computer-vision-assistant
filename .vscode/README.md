@@ -6,8 +6,8 @@ This directory contains VS Code configuration files for building, running, and d
 
 ### Debug Configurations (F5 or Run > Start Debugging)
 
-1. **Python: Autobot Server** - Runs the full Python backend server with the orchestrator and debugging enabled
-2. **Python: FastAPI Only** - Runs only the FastAPI server without the orchestrator
+1. **Python: Autobot Server** - Runs the full Python backend server with uvicorn and the orchestrator
+2. **Python: FastAPI Only** - Runs only the FastAPI server with uvicorn
 3. **Frontend: Vite Dev Server** - Runs only the frontend development server
 4. **Debug All** - Runs the backend server first, then the frontend development server
 5. **Server + Frontend** - Runs both the full backend server and frontend development server in parallel
@@ -17,7 +17,7 @@ This directory contains VS Code configuration files for building, running, and d
 
 1. **build-frontend** - Builds the frontend for production (includes npm install)
 2. **start-server** - Starts the full Python backend server with orchestrator
-3. **start-fastapi-only** - Starts only the FastAPI server without the orchestrator
+3. **start-fastapi-only** - Starts only the FastAPI server with uvicorn
 4. **start-dev-frontend** - Starts the frontend development server (includes npm install)
 5. **build-and-run-all** - Builds the frontend and then runs the full server (production mode)
 6. **dev-mode-all** - Runs both the full server and frontend in development mode

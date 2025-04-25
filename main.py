@@ -9,13 +9,13 @@ import os
 import sys
 import argparse
 from rich.console import Console
+from fastapi import FastAPI
 
 # Add the parent directory to the path so we can import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from api.main import start_api
-from core.orchestrator import Orchestrator
-from core.project import ProjectManager
+from api.main import app as api_app, start_api
+from core.orchestrator import Orchestrator, AgentState
 
 # Initialize console for rich output
 console = Console()
@@ -23,6 +23,9 @@ console = Console()
 # Default port and debug settings
 DEFAULT_PORT = 8000
 DEBUG_MODE = True
+
+# Global orchestrator instance
+orchestrator = None
 
 
 def print_welcome():
@@ -37,6 +40,29 @@ def print_welcome():
         border_style="green"
     ))
 
+def init_app():
+    """Initialize the FastAPI app with orchestrator.
+
+    Returns:
+        FastAPI: The initialized FastAPI application
+    """
+    global orchestrator
+
+    # Initialize orchestrator
+    orchestrator = Orchestrator()
+
+    # Set the initial state to waiting_for_user (paused)
+    orchestrator.state = AgentState.WAITING_FOR_USER
+
+    # Set the orchestrator in the API app
+    from api.main import set_orchestrator
+    set_orchestrator(orchestrator)
+
+    return api_app
+
+# Create app instance for uvicorn
+app = init_app()
+
 def main():
     """Main entry point for Autobot."""
     print_welcome()
@@ -47,21 +73,8 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
 
-    # Initialize project manager
-    project_manager = ProjectManager()
-
-    # Default project name and goal
-    default_project_name = "default_project"
-    default_project_goal = "Assist the user with their tasks"
-
-    # Try to load the default project, or create it if it doesn't exist
-    project = project_manager.load_project(default_project_name)
-    if not project:
-        console.print(f"[bold yellow]Creating default project '{default_project_name}' with goal: {default_project_goal}[/bold yellow]")
-        project = project_manager.create_project(default_project_name, default_project_goal)
-
-    # Start the orchestrator
-    orchestrator = Orchestrator(project)
+    # Start the orchestrator without a project
+    orchestrator = Orchestrator()
 
     # Import AgentState from core.orchestrator
     from core.orchestrator import AgentState

@@ -238,6 +238,99 @@ class ProjectManager:
 
         return projects
 
+    def rename_project(self, old_name: str, new_name: str) -> Project:
+        """
+        Rename an existing project.
+
+        Args:
+            old_name (str): The current name of the project.
+            new_name (str): The desired new name for the project.
+
+        Returns:
+            Project: The updated project object.
+            
+        Raises:
+            FileNotFoundError: If the project with old_name does not exist.
+            ValueError: If a project with new_name already exists or names are invalid.
+        """
+        # Sanitize names
+        safe_old_name = "".join(c if c.isalnum() or c in ['-', '_'] else '_' for c in old_name)
+        safe_new_name = "".join(c if c.isalnum() or c in ['-', '_'] else '_' for c in new_name)
+
+        if not safe_old_name or not safe_new_name:
+            raise ValueError("Project names cannot be empty after sanitization.")
+            
+        if safe_old_name == safe_new_name:
+             raise ValueError("New project name cannot be the same as the old name.")
+
+        old_project_path = os.path.join(self.projects_dir, safe_old_name)
+        new_project_path = os.path.join(self.projects_dir, safe_new_name)
+
+        # Check if old project exists
+        if not os.path.exists(old_project_path) or not os.path.isdir(old_project_path):
+            logger.error(f"Project directory to rename not found: {old_project_path}")
+            raise FileNotFoundError(f"Project '{old_name}' not found.")
+
+        # Check if new project name already exists
+        if os.path.exists(new_project_path):
+            logger.error(f"Project directory with the new name already exists: {new_project_path}")
+            raise ValueError(f"A project named '{new_name}' already exists.")
+
+        try:
+            # Rename the directory
+            os.rename(old_project_path, new_project_path)
+            logger.info(f"Renamed project directory from {old_project_path} to {new_project_path}")
+
+            # Update the config file inside the renamed directory
+            config_path = os.path.join(new_project_path, "config.json")
+            project = None
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                    
+                    # Update project name in config
+                    config["name"] = new_name
+                    config["updated_at"] = datetime.now().isoformat()
+
+                    with open(config_path, "w", encoding="utf-8") as f:
+                        json.dump(config, f, indent=2)
+                    
+                    # Create project instance with updated info
+                    project = Project(
+                        name=new_name,
+                        path=new_project_path,
+                        goal=config.get("goal", "")
+                    )
+                    project.created_at = config.get("created_at", project.created_at)
+                    project.updated_at = config.get("updated_at", project.updated_at)
+                    project.status = config.get("status", project.status)
+
+                    logger.info(f"Updated config file for renamed project: {config_path}")
+
+                except (json.JSONDecodeError, IOError) as e:
+                    logger.error(f"Error updating config file {config_path} after rename: {e}")
+                    # Continue even if config update fails, but log the error
+            
+            # If config update failed or no config existed, return a basic project object
+            if not project:
+                 project = Project(name=new_name, path=new_project_path)
+                 project.save_config() # Attempt to save a basic config
+
+            return project
+
+        except OSError as e:
+            logger.error(f"Error renaming project directory {old_project_path} to {new_project_path}: {e}")
+            # Attempt to revert rename if possible, though this might fail too
+            if not os.path.exists(old_project_path) and os.path.exists(new_project_path):
+                 try:
+                     os.rename(new_project_path, old_project_path)
+                     logger.warning(f"Attempted to revert rename for {old_name}")
+                 except OSError as revert_e:
+                     logger.error(f"Failed to revert rename: {revert_e}")
+            raise ValueError(f"Failed to rename project: {e}")
+
+
     def delete_project(self, name: str) -> bool:
         """
         Delete a project.

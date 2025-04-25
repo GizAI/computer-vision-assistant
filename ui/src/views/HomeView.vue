@@ -257,15 +257,18 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from "vue";
 import { useAutobotStore } from "../stores/autobot";
 import { marked } from "marked";
 import FileExplorer from "../components/FileExplorer.vue";
 import axios from "axios";
 import { ChevronDown, ClipboardList } from "lucide-vue-next";
+import { useRoute, useRouter } from "vue-router";
 
 const autobotStore = useAutobotStore();
+const route = useRoute();
+const router = useRouter();
 const newMessage = ref("");
 const chatContainer = ref(null);
 const workLogsContainer = ref(null);
@@ -299,16 +302,31 @@ const scrollToBottom = async (container) => {
 
 // Fetch initial data
 onMounted(async () => {
-  await autobotStore.getStatus();
-  await autobotStore.getMessages();
-  await autobotStore.getWorkLogs();
+  // Check if we have a project ID in the route
+  const projectId = route.params.id;
 
-  // Get the current plan
-  try {
-    await autobotStore.getPlan();
-    plan.value = autobotStore.plan;
-  } catch (error) {
-    console.error("Error fetching plan:", error);
+  if (projectId) {
+    // Load the specific project
+    try {
+      await autobotStore.loadProject(decodeURIComponent(projectId as string));
+    } catch (error) {
+      console.error("Error loading project from route:", error);
+      // If project loading fails, redirect to home
+      router.push("/");
+    }
+  } else {
+    // Just get the status if no project is specified
+    await autobotStore.getStatus();
+    await autobotStore.getMessages();
+    await autobotStore.getWorkLogs();
+
+    // Get the current plan
+    try {
+      await autobotStore.getPlan();
+      plan.value = autobotStore.plan;
+    } catch (error) {
+      console.error("Error fetching plan:", error);
+    }
   }
 
   // Scroll to bottom of chat and work logs initially
@@ -350,6 +368,27 @@ watch(
   }
 );
 
+// Watch for route changes to handle navigation between projects
+watch(
+  () => route.params.id,
+  async (newProjectId) => {
+    if (newProjectId) {
+      // Load the specific project when route changes
+      try {
+        await autobotStore.loadProject(
+          decodeURIComponent(newProjectId as string)
+        );
+      } catch (error) {
+        console.error("Error loading project from route change:", error);
+        router.push("/");
+      }
+    } else {
+      // Clear project when navigating to home
+      autobotStore.clearCurrentProject();
+    }
+  }
+);
+
 // Generate a project name with emoji using AI
 const generateProjectName = async (message) => {
   const response = await axios.post("/api/generate-project-name", {
@@ -371,8 +410,8 @@ const createNewProject = async (message) => {
     // Create the project with the message as the initial goal
     const newProject = await autobotStore.createProject(projectName, message);
 
-    // Load the project data using the project name (which is the ID)
-    await autobotStore.loadProject(projectName);
+    // Update the URL to the project-specific URL
+    router.push(`/project/${encodeURIComponent(projectName)}`);
 
     // Send the message to the new project
     await autobotStore.sendMessage(message);

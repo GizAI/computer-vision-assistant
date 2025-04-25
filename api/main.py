@@ -7,9 +7,9 @@ Provides REST endpoints and WebSocket for user interaction.
 import os
 import logging
 import json
-from typing import Dict, Any, List, Optional
+from typing import List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, BackgroundTasks, APIRouter
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -17,8 +17,25 @@ from pydantic import BaseModel
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
-app = FastAPI(title="Autobot API", description="API for Autobot autonomous agent")
+# Define lifespan context manager
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Mount UI static files
+    ui_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "dist")
+    if os.path.exists(ui_dir):
+        app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
+        logger.info(f"Mounted UI from {ui_dir}")
+    yield
+    # Shutdown: Nothing to clean up
+
+# Create FastAPI app with lifespan
+app = FastAPI(
+    title="Autobot API",
+    description="API for Autobot autonomous agent",
+    lifespan=lifespan
+)
 
 # Create API router for /api prefix
 api_router = APIRouter(prefix="/api")
@@ -53,8 +70,18 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# Global orchestrator instance (set by start_api function)
+# Global orchestrator instance (set by start_api function or set_orchestrator function)
 orchestrator = None
+
+def set_orchestrator(orchestrator_instance):
+    """
+    Set the global orchestrator instance.
+
+    Args:
+        orchestrator_instance: The orchestrator instance to use.
+    """
+    global orchestrator
+    orchestrator = orchestrator_instance
 
 # Pydantic models for API
 class Message(BaseModel):
@@ -114,6 +141,10 @@ async def get_messages(limit: int = 10, offset: int = 0):
     if not orchestrator:
         raise HTTPException(status_code=503, detail="Orchestrator not initialized")
 
+    if not orchestrator.memory_manager:
+        # Return empty list when no project is selected
+        return []
+
     return orchestrator.memory_manager.get_messages(limit, offset)
 
 @api_router.get("/work-logs")
@@ -128,6 +159,10 @@ async def get_work_logs(limit: int = 50):
 async def get_plan():
     if not orchestrator:
         raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    if not orchestrator.planning_module:
+        # Return empty plan when no project is selected
+        return {"plan": ""}
 
     plan = orchestrator.planning_module.get_current_plan()
 
@@ -195,6 +230,37 @@ async def get_project(project_id: str):
 
     return project.to_dict()
 
+@api_router.post("/projects/{project_id}/select")
+async def select_project(project_id: str, background_tasks: BackgroundTasks):
+    """Select a project as the current project for the orchestrator."""
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    # Import from relative path
+    from core.project import ProjectManager
+    project_manager = ProjectManager()
+
+    # Load the project
+    project = project_manager.load_project(project_id)
+
+    if not project:
+        raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+
+    # Set the project in the orchestrator
+    orchestrator.set_project(project)
+
+    # Broadcast project selection to WebSocket clients
+    background_tasks.add_task(
+        manager.broadcast,
+        json.dumps({
+            "type": "project_selected",
+            "name": project_id,
+            "goal": project.goal
+        })
+    )
+
+    return {"status": "success", "message": f"Project '{project_id}' selected"}
+
 @api_router.post("/projects")
 async def create_project(project: Project, background_tasks: BackgroundTasks):
     # Import from relative path
@@ -214,6 +280,64 @@ async def create_project(project: Project, background_tasks: BackgroundTasks):
     )
 
     return new_project.to_dict()
+
+class ProjectUpdateRequest(BaseModel):
+    name: str
+
+@api_router.put("/projects/{project_id}")
+async def rename_project(project_id: str, update_request: ProjectUpdateRequest, background_tasks: BackgroundTasks):
+    """Rename a project."""
+    from core.project import ProjectManager
+    project_manager = ProjectManager()
+
+    try:
+        updated_project = project_manager.rename_project(project_id, update_request.name)
+
+        # Broadcast project update (optional, depends on desired behavior)
+        background_tasks.add_task(
+            manager.broadcast,
+            json.dumps({
+                "type": "project_renamed",
+                "old_name": project_id,
+                "new_name": update_request.name
+            })
+        )
+
+        return updated_project.to_dict()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+    except ValueError as e: # Handle potential naming conflicts or invalid names
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error renaming project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error during project rename")
+
+
+@api_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str, background_tasks: BackgroundTasks):
+    """Delete a project."""
+    from core.project import ProjectManager
+    project_manager = ProjectManager()
+
+    try:
+        project_manager.delete_project(project_id)
+
+        # Broadcast project deletion
+        background_tasks.add_task(
+            manager.broadcast,
+            json.dumps({
+                "type": "project_deleted",
+                "name": project_id
+            })
+        )
+
+        return {"message": f"Project '{project_id}' deleted successfully"}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
+    except Exception as e:
+        logger.error(f"Error deleting project {project_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error during project deletion")
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -297,14 +421,7 @@ api_router.include_router(files_router)
 # Include the API router
 app.include_router(api_router)
 
-# Mount static files for frontend
-@app.on_event("startup")
-async def startup_event():
-    # Check if UI directory exists
-    ui_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui", "dist")
-    if os.path.exists(ui_dir):
-        app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
-        logger.info(f"Mounted UI from {ui_dir}")
+# Note: UI mounting is now handled in the lifespan context manager
 
 def start_api(port: int = 8000, debug: bool = False, orchestrator_instance = None):
     """

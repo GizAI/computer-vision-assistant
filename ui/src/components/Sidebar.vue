@@ -88,12 +88,11 @@
         >
           <div
             class="w-6 h-6 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground font-medium text-xs"
+            v-if="collapsed"
           >
-            {{ getProjectEmoji(project.name) }}
+            {{ getProjectIcon(project.name) }}
           </div>
-          <span v-if="!collapsed" class="truncate">{{
-            getProjectDisplayName(project.name)
-          }}</span>
+          <span v-if="!collapsed" class="truncate">{{ project.name }}</span>
         </button>
       </div>
     </div>
@@ -185,10 +184,11 @@
   </div>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
 import { useAutobotStore } from "../stores/autobot";
 import { useRouter } from "vue-router";
+import type { Project } from "../types";
 
 const autobotStore = useAutobotStore();
 const router = useRouter();
@@ -224,15 +224,10 @@ const toggleSidebar = () => {
 };
 
 // Load a project directly
-const loadProject = async (project) => {
+const loadProject = async (project: Project) => {
   try {
-    // Get project data directly without sending a command
-    await autobotStore.loadProject(project.name);
-
-    // Navigate to home if not already there
-    if (router.currentRoute.value.path !== "/") {
-      router.push("/");
-    }
+    // Navigate to the project-specific URL
+    router.push(`/project/${encodeURIComponent(project.name)}`);
   } catch (error) {
     console.error("Error loading project:", error);
   }
@@ -250,26 +245,9 @@ const createEmptyProject = () => {
 };
 
 // Extract emoji from project name
-const getProjectEmoji = (name) => {
-  // Check if the first character is an emoji (usually 2 bytes)
+const getProjectIcon = (name) => {
   const firstChar = name.substring(0, 2);
-  const emojiRegex =
-    /[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
-
-  if (emojiRegex.test(firstChar)) {
-    return firstChar;
-  }
-
-  // Fallback to first letter
-  return name.charAt(0).toUpperCase();
-};
-
-// Get display name without emoji
-const getProjectDisplayName = (name) => {
-  // Remove emoji if present
-  const emojiRegex =
-    /[\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
-  return name.replace(emojiRegex, "").trim();
+  return firstChar;
 };
 
 // Save settings
