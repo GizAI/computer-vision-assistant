@@ -8,6 +8,7 @@ export const useAutobotStore = defineStore("autobot", {
       state: "idle" as Status["state"],
       current_task: null as string | null,
       project: "",
+      project_id: null as string | null,
       goal: "",
     },
     messages: [] as Message[],
@@ -116,13 +117,32 @@ export const useAutobotStore = defineStore("autobot", {
     async loadProject(projectId: string): Promise<any> {
       try {
         this.loading = true;
+        console.log(`Loading project with ID: ${projectId}`);
+
+        // First get the project details
         const response = await axios.get(`/api/projects/${encodeURIComponent(projectId)}`);
+        const projectData = response.data;
+
+        console.log("Project data loaded:", projectData);
+
+        if (!projectData || !projectData.id) {
+          throw new Error(`Invalid project data received for ID: ${projectId}`);
+        }
+
+        // Select the project on the server side
+        await axios.post(`/api/projects/${encodeURIComponent(projectId)}/select`);
+
+        // Clear existing data first to prevent UI flicker
+        this.messages = [];
+        this.workLogs = [];
+        this.plan = "";
 
         // Update status with project data
         this.status = {
           ...this.status,
-          project: projectId,
-          goal: response.data.goal || "",
+          project: projectData.name || "",
+          project_id: projectData.id,
+          goal: projectData.goal || "",
         };
 
         // Get project data in parallel
@@ -133,11 +153,15 @@ export const useAutobotStore = defineStore("autobot", {
         ]);
 
         this.error = null;
-        return response.data;
+        return projectData;
       } catch (error) {
         const err = error as AxiosError;
         this.error = err.message || "Failed to load project";
         console.error("Error loading project:", error);
+
+        // Reset state on error
+        this.clearCurrentProject();
+
         throw error;
       } finally {
         this.loading = false;
@@ -149,6 +173,7 @@ export const useAutobotStore = defineStore("autobot", {
       this.status = {
         ...this.status,
         project: "",
+        project_id: null,
         goal: "",
         current_task: null,
       };
@@ -160,81 +185,133 @@ export const useAutobotStore = defineStore("autobot", {
 
     initWebSocket(): void {
       // Close existing connection if any
-      if (this.websocket) {
-        this.websocket.close();
-      }
+      this.closeWebSocket();
 
       // Create new WebSocket connection
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      this.websocket = new WebSocket(wsUrl);
+      try {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        console.log(`Connecting to WebSocket at ${wsUrl}`);
 
-      this.websocket.onopen = () => {
-        console.log("WebSocket connected");
-        this.websocketConnected = true;
+        this.websocket = new WebSocket(wsUrl);
 
-        // Request initial data
-        this.sendWebSocketRequest("status_request");
-        this.sendWebSocketRequest("work_logs_request", { limit: 50 });
-      };
+        this.websocket.onopen = () => {
+          console.log("WebSocket connected successfully");
+          this.websocketConnected = true;
+          this.error = null;
 
-      this.websocket.onmessage = (event) => {
+          // Request initial data
+          this.sendWebSocketRequest("status_request");
+          this.sendWebSocketRequest("work_logs_request", { limit: 50 });
+        };
+
+        this.websocket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data) as WebSocketMessage;
+            console.log(`Received WebSocket message of type: ${data.type}`);
+
+            switch (data.type) {
+              case "message":
+                this.messages.push({
+                  id: data.id,
+                  content: data.content,
+                  sender: data.sender,
+                  timestamp: new Date().toISOString(),
+                });
+                break;
+              case "status":
+                console.log("Received status update:", data.status);
+                this.status = data.status;
+                break;
+              case "project_created":
+                console.log("Project created:", data);
+                this.getProjects();
+                break;
+              case "work_logs":
+                this.workLogs = data.logs;
+                break;
+              case "goal_updated":
+                console.log("Goal updated:", data.goal);
+                this.status.goal = data.goal;
+                break;
+              case "plan_updated":
+                console.log("Plan updated");
+                this.plan = data.plan;
+                break;
+              case "project_updated":
+                if (data.project) {
+                  console.log("Project updated:", data.project);
+                  this.status.project = data.project.name;
+                  this.status.project_id = data.project.id;
+                  this.status.goal = data.project.goal;
+
+                  // Refresh related data
+                  this.getMessages();
+                  this.getWorkLogs();
+                  this.getPlan();
+                }
+                break;
+              case "project_selected":
+                console.log("Project selected:", data);
+                // Update status with selected project data
+                if (data.id) {
+                  this.status.project_id = data.id;
+                  this.status.project = data.name || "";
+                  this.status.goal = data.goal || "";
+
+                  // Refresh related data
+                  this.getMessages();
+                  this.getWorkLogs();
+                  this.getPlan();
+                }
+                break;
+            }
+          } catch (error) {
+            console.error("Error processing WebSocket message:", error);
+          }
+        };
+
+        this.websocket.onclose = (event) => {
+          console.log(`WebSocket disconnected with code: ${event.code}, reason: ${event.reason}`);
+          this.websocketConnected = false;
+
+          // Only attempt to reconnect if it wasn't a normal closure
+          if (event.code !== 1000) {
+            console.log("Attempting to reconnect in 5 seconds...");
+            // Attempt to reconnect after a delay
+            setTimeout(() => this.initWebSocket(), 5000);
+          }
+        };
+
+        this.websocket.onerror = (error) => {
+          console.error("WebSocket error:", error);
+          this.error = "WebSocket connection error";
+        };
+      } catch (error) {
+        console.error("Error initializing WebSocket:", error);
+        this.error = "Failed to initialize WebSocket connection";
+
+        // Try to reconnect after a delay
+        setTimeout(() => this.initWebSocket(), 5000);
+      }
+    },
+
+    closeWebSocket(): void {
+      if (this.websocket) {
         try {
-          const data = JSON.parse(event.data) as WebSocketMessage;
-
-          switch (data.type) {
-            case "message":
-              this.messages.push({
-                id: data.id,
-                content: data.content,
-                sender: data.sender,
-                timestamp: new Date().toISOString(),
-              });
-              break;
-            case "status":
-              this.status = data.status;
-              break;
-            case "project_created":
-              this.getProjects();
-              break;
-            case "work_logs":
-              this.workLogs = data.logs;
-              break;
-            case "goal_updated":
-              this.status.goal = data.goal;
-              break;
-            case "plan_updated":
-              this.plan = data.plan;
-              break;
-            case "project_updated":
-              if (data.project) {
-                this.status.project = data.project.name;
-                this.status.goal = data.project.goal;
-
-                // Refresh related data
-                this.getMessages();
-                this.getWorkLogs();
-                this.getPlan();
-              }
-              break;
+          // Only close if the connection is open or connecting
+          if (this.websocket.readyState === WebSocket.OPEN ||
+              this.websocket.readyState === WebSocket.CONNECTING) {
+            console.log("Closing existing WebSocket connection");
+            this.websocket.close(1000, "Normal closure");
           }
         } catch (error) {
-          console.error("Error processing WebSocket message:", error);
+          console.error("Error closing WebSocket:", error);
+        } finally {
+          this.websocket = null;
+          this.websocketConnected = false;
         }
-      };
-
-      this.websocket.onclose = () => {
-        console.log("WebSocket disconnected");
-        this.websocketConnected = false;
-
-        // Attempt to reconnect after a delay
-        setTimeout(() => this.initWebSocket(), 5000);
-      };
-
-      this.websocket.onerror = (error) => {
-        console.error("WebSocket error:", error);
-        this.error = "WebSocket connection error";
-      };
+      }
     },
 
     sendWebSocketRequest(type: string, data: Record<string, any> = {}): void {
@@ -242,11 +319,38 @@ export const useAutobotStore = defineStore("autobot", {
     },
 
     sendWebSocketData(data: Record<string, any>): void {
-      if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-        console.error("WebSocket not connected");
+      if (!this.websocket) {
+        console.error("WebSocket not initialized");
+        // Try to initialize WebSocket if it doesn't exist
+        this.initWebSocket();
         return;
       }
-      this.websocket.send(JSON.stringify(data));
+
+      if (this.websocket.readyState === WebSocket.CONNECTING) {
+        // If still connecting, wait and retry
+        console.log("WebSocket still connecting, waiting to send data");
+        setTimeout(() => this.sendWebSocketData(data), 500);
+        return;
+      }
+
+      if (this.websocket.readyState !== WebSocket.OPEN) {
+        console.error(`WebSocket not open (state: ${this.websocket.readyState})`);
+        // Try to reinitialize WebSocket if it's closed or closing
+        if (this.websocket.readyState === WebSocket.CLOSED ||
+            this.websocket.readyState === WebSocket.CLOSING) {
+          console.log("Reinitializing WebSocket connection");
+          this.initWebSocket();
+        }
+        return;
+      }
+
+      try {
+        const jsonData = JSON.stringify(data);
+        this.websocket.send(jsonData);
+        console.log(`Sent WebSocket data: ${jsonData.substring(0, 100)}${jsonData.length > 100 ? '...' : ''}`);
+      } catch (error) {
+        console.error("Error sending WebSocket data:", error);
+      }
     },
 
     sendWebSocketMessage(content: string, sender = "user"): void {
@@ -281,6 +385,42 @@ export const useAutobotStore = defineStore("autobot", {
       } catch (error) {
         const err = error as Error;
         console.error("Error resuming agent:", error);
+        return { success: false, error: err.message };
+      }
+    },
+
+    async updateGoal(goal: string): Promise<ApiResponse<null>> {
+      console.log("Updating goal:", goal);
+      try {
+        const response = await this.apiRequest<ApiResponse<null>>(
+          'post',
+          '/api/goal',
+          { goal }
+        );
+        // Update local state immediately for better UX
+        this.status.goal = goal;
+        return response;
+      } catch (error) {
+        const err = error as Error;
+        console.error("Error updating goal:", error);
+        return { success: false, error: err.message };
+      }
+    },
+
+    async updatePlan(plan: string): Promise<ApiResponse<null>> {
+      console.log("Updating plan:", plan);
+      try {
+        const response = await this.apiRequest<ApiResponse<null>>(
+          'post',
+          '/api/plan',
+          { plan }
+        );
+        // Update local state immediately for better UX
+        this.plan = plan;
+        return response;
+      } catch (error) {
+        const err = error as Error;
+        console.error("Error updating plan:", error);
         return { success: false, error: err.message };
       }
     },

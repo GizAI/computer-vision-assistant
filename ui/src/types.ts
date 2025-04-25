@@ -3,7 +3,8 @@
 export interface Status {
   state: 'idle' | 'planning' | 'executing' | 'reflecting' | 'waiting_for_user';
   current_task: string | null;
-  project: string;
+  project: string;  // Project name (for backward compatibility)
+  project_id: string | null;  // Project ID
   goal: string;
 }
 
@@ -15,6 +16,7 @@ export interface Message {
 }
 
 export interface Project {
+  id: string;
   name: string;
   goal: string;
 }

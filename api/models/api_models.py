@@ -15,6 +15,7 @@ class Project(BaseModel):
     """Model for a project."""
     name: str
     goal: str
+    id: Optional[str] = None
 
 class TaskRequest(BaseModel):
     """Model for a task execution request."""
@@ -24,7 +25,8 @@ class StatusResponse(BaseModel):
     """Model for agent status response."""
     state: str
     current_task: Optional[str] = None
-    project: str
+    project: str  # Project name (for backward compatibility)
+    project_id: Optional[str] = None  # Project ID
     goal: str
 
 class MessageResponse(BaseModel):
@@ -42,6 +44,7 @@ class ProjectListResponse(BaseModel):
 
 class ProjectResponse(BaseModel):
     """Model for a project response."""
+    id: str
     name: str
     path: str
     goal: str

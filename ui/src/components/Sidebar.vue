@@ -78,11 +78,11 @@
       <div class="space-y-1 px-2 mt-2">
         <button
           v-for="project in projects"
-          :key="project.name"
+          :key="project.id"
           @click="loadProject(project)"
           class="w-full text-left p-2 rounded-md hover:bg-muted transition-colors flex items-center gap-2"
           :class="{
-            'bg-muted': currentProject === project.name,
+            'bg-muted': currentProjectId === project.id,
             'justify-center': collapsed,
           }"
         >
@@ -204,6 +204,12 @@ const settings = ref({
 
 const projects = computed(() => autobotStore.projects);
 const currentProject = computed(() => autobotStore.status.project);
+const currentProjectId = computed(() => autobotStore.status.project_id);
+
+// Debug log for current project state
+watch(currentProjectId, (newId) => {
+  console.log(`Sidebar - Current project ID changed: ${newId}`);
+});
 
 // Fetch projects on mount
 onMounted(async () => {
@@ -226,8 +232,21 @@ const toggleSidebar = () => {
 // Load a project directly
 const loadProject = async (project: Project) => {
   try {
-    // Navigate to the project-specific URL
-    router.push(`/project/${encodeURIComponent(project.name)}`);
+    if (!project.id) {
+      console.error("Cannot load project: Missing project ID", project);
+      return;
+    }
+
+    console.log(`Sidebar - Loading project: ${project.name} (${project.id})`);
+
+    // If we're already on this project, don't navigate (prevents unnecessary reloads)
+    if (currentProjectId.value === project.id) {
+      console.log("Already on this project, skipping navigation");
+      return;
+    }
+
+    // Navigate to the project-specific URL using project ID
+    router.push(`/project/${encodeURIComponent(project.id)}`);
   } catch (error) {
     console.error("Error loading project:", error);
   }

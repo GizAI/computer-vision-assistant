@@ -239,6 +239,7 @@ class Orchestrator:
                 "state": self.state.value,
                 "current_task": None,
                 "project": "",
+                "project_id": None,
                 "goal": ""
             }
 
@@ -246,6 +247,7 @@ class Orchestrator:
             "state": self.state.value,
             "current_task": self.current_task,
             "project": self.project.name,
+            "project_id": self.project.id,
             "goal": self.project.goal
         }
 
@@ -261,6 +263,47 @@ class Orchestrator:
         """
         # Return the most recent logs up to the limit
         return self.work_logs[-limit:] if self.work_logs else []
+
+    def update_goal(self, goal: str) -> None:
+        """
+        Update the current project's goal.
+
+        Args:
+            goal (str): New goal text
+        """
+        if not self.project:
+            logger.error("Cannot update goal: no project is currently selected")
+            raise ValueError("No project is currently selected")
+
+        # Update the goal in the project
+        self.project.goal = goal
+        self.project.save_config()
+        
+        logger.info(f"Updated project goal: {goal}")
+        self.send_task_log(f"Goal updated: {goal}")
+        
+        # Optionally, you might want to reflect on the updated goal
+        self.send_message(f"Project goal updated to: {goal}", "autobot", "user_chat")
+
+    def update_plan(self, plan: str) -> None:
+        """
+        Update the current project's plan.
+
+        Args:
+            plan (str): New plan text
+        """
+        if not self.planning_module:
+            logger.error("Cannot update plan: planning module not initialized")
+            raise ValueError("Planning module not initialized")
+            
+        # Update the plan using the planning module
+        self.planning_module.update_plan(plan)
+        
+        logger.info(f"Plan updated manually by user")
+        self.send_task_log(f"Plan updated manually by user")
+        
+        # Notify the user
+        self.send_message("Plan has been updated successfully.", "autobot", "user_chat")
 
     def _check_user_messages(self):
         """Check for and process user messages."""

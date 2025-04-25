@@ -7,6 +7,7 @@ Provides REST endpoints and WebSocket for user interaction.
 import os
 import logging
 import json
+import asyncio
 from typing import List
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks, APIRouter
@@ -53,20 +54,47 @@ app.add_middleware(
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self._lock = asyncio.Lock()  # Add a lock for thread safety
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        async with self._lock:
+            self.active_connections.append(websocket)
+            logger.info(f"WebSocket connected. Active connections: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+        try:
+            self.active_connections.remove(websocket)
+            logger.info(f"WebSocket disconnected. Active connections: {len(self.active_connections)}")
+        except ValueError:
+            # Connection might have been removed already
+            logger.warning("Attempted to disconnect a WebSocket that was not in active_connections")
 
     async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
+        try:
+            await websocket.send_text(message)
+        except Exception as e:
+            logger.error(f"Error sending personal message: {str(e)}")
+            # Remove the connection if it's broken
+            self.disconnect(websocket)
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            await connection.send_text(message)
+        disconnected_websockets = []
+
+        # Make a copy of active_connections to avoid modification during iteration
+        async with self._lock:
+            connections = self.active_connections.copy()
+
+        for connection in connections:
+            try:
+                await connection.send_text(message)
+            except Exception as e:
+                logger.error(f"Error broadcasting message: {str(e)}")
+                disconnected_websockets.append(connection)
+
+        # Clean up disconnected websockets
+        for websocket in disconnected_websockets:
+            self.disconnect(websocket)
 
 manager = ConnectionManager()
 
@@ -91,6 +119,7 @@ class Message(BaseModel):
 class Project(BaseModel):
     name: str
     goal: str
+    id: str = None
 
 class TaskRequest(BaseModel):
     task: str
@@ -207,6 +236,60 @@ async def reflect(background_tasks: BackgroundTasks):
 
     return {"id": message_id, "status": "reflecting"}
 
+# Goal update endpoint
+class GoalUpdateRequest(BaseModel):
+    goal: str
+
+@api_router.post("/goal")
+async def update_goal(goal_request: GoalUpdateRequest, background_tasks: BackgroundTasks):
+    """Update the current project's goal."""
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    if not orchestrator.current_project:
+        raise HTTPException(status_code=400, detail="No project is currently selected")
+
+    # Update the goal in the project
+    orchestrator.update_goal(goal_request.goal)
+
+    # Broadcast goal update to WebSocket clients
+    background_tasks.add_task(
+        manager.broadcast,
+        json.dumps({
+            "type": "goal_updated",
+            "goal": goal_request.goal
+        })
+    )
+
+    return {"status": "success", "message": "Goal updated"}
+
+# Plan update endpoint
+class PlanUpdateRequest(BaseModel):
+    plan: str
+
+@api_router.post("/plan")
+async def update_plan(plan_request: PlanUpdateRequest, background_tasks: BackgroundTasks):
+    """Update the current project's plan."""
+    if not orchestrator:
+        raise HTTPException(status_code=503, detail="Orchestrator not initialized")
+
+    if not orchestrator.planning_module:
+        raise HTTPException(status_code=400, detail="Planning module not initialized")
+
+    # Update the plan
+    orchestrator.planning_module.update_plan(plan_request.plan)
+
+    # Broadcast plan update to WebSocket clients
+    background_tasks.add_task(
+        manager.broadcast,
+        json.dumps({
+            "type": "plan_updated",
+            "plan": plan_request.plan
+        })
+    )
+
+    return {"status": "success", "message": "Plan updated"}
+
 @api_router.get("/projects")
 async def list_projects():
     # Import from relative path
@@ -254,12 +337,13 @@ async def select_project(project_id: str, background_tasks: BackgroundTasks):
         manager.broadcast,
         json.dumps({
             "type": "project_selected",
-            "name": project_id,
+            "id": project.id,
+            "name": project.name,
             "goal": project.goal
         })
     )
 
-    return {"status": "success", "message": f"Project '{project_id}' selected"}
+    return {"status": "success", "message": f"Project '{project.name}' selected", "id": project.id}
 
 @api_router.post("/projects")
 async def create_project(project: Project, background_tasks: BackgroundTasks):
@@ -274,6 +358,7 @@ async def create_project(project: Project, background_tasks: BackgroundTasks):
         manager.broadcast,
         json.dumps({
             "type": "project_created",
+            "id": new_project.id,
             "name": project.name,
             "goal": project.goal
         })
@@ -291,14 +376,20 @@ async def rename_project(project_id: str, update_request: ProjectUpdateRequest, 
     project_manager = ProjectManager()
 
     try:
+        # First try to get the project to get its original name
+        project = project_manager.load_project(project_id)
+        old_name = project.name if project else project_id
+
+        # Rename the project
         updated_project = project_manager.rename_project(project_id, update_request.name)
 
-        # Broadcast project update (optional, depends on desired behavior)
+        # Broadcast project update
         background_tasks.add_task(
             manager.broadcast,
             json.dumps({
                 "type": "project_renamed",
-                "old_name": project_id,
+                "id": updated_project.id,
+                "old_name": old_name,
                 "new_name": update_request.name
             })
         )
@@ -320,6 +411,11 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
     project_manager = ProjectManager()
 
     try:
+        # First try to get the project to get its name
+        project = project_manager.load_project(project_id)
+        project_name = project.name if project else project_id
+
+        # Delete the project
         project_manager.delete_project(project_id)
 
         # Broadcast project deletion
@@ -327,11 +423,12 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
             manager.broadcast,
             json.dumps({
                 "type": "project_deleted",
-                "name": project_id
+                "id": project_id,
+                "name": project_name
             })
         )
 
-        return {"message": f"Project '{project_id}' deleted successfully"}
+        return {"message": f"Project '{project_name}' deleted successfully"}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Project not found: {project_id}")
     except Exception as e:
@@ -341,74 +438,108 @@ async def delete_project(project_id: str, background_tasks: BackgroundTasks):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    client_id = id(websocket)  # Generate a unique ID for this connection
+    logger.info(f"New WebSocket connection request from client {client_id}")
+
     try:
-        while True:
-            data = await websocket.receive_text()
+        await manager.connect(websocket)
+        logger.info(f"WebSocket client {client_id} connected successfully")
 
-            # Parse message
+        # Send initial status to the client
+        if orchestrator:
             try:
-                message_data = json.loads(data)
+                await manager.send_personal_message(
+                    json.dumps({
+                        "type": "status",
+                        "status": orchestrator.get_status()
+                    }),
+                    websocket
+                )
+            except Exception as e:
+                logger.error(f"Error sending initial status to client {client_id}: {str(e)}")
 
-                if "type" in message_data:
-                    if message_data["type"] == "message" and "content" in message_data:
-                        # Send message to orchestrator
-                        if orchestrator:
-                            message_id = orchestrator.send_message(
-                                message_data["content"],
-                                message_data.get("sender", "user")
-                            )
+        # Main message loop
+        while True:
+            try:
+                data = await websocket.receive_text()
+                logger.debug(f"Received message from client {client_id}: {data[:100]}...")
 
-                            # Broadcast message to all clients
-                            await manager.broadcast(
-                                json.dumps({
-                                    "type": "message",
-                                    "id": message_id,
-                                    "content": message_data["content"],
-                                    "sender": message_data.get("sender", "user")
-                                })
-                            )
+                # Parse message
+                try:
+                    message_data = json.loads(data)
 
-                    elif message_data["type"] == "status_request":
-                        # Send status to client
-                        if orchestrator:
-                            await manager.send_personal_message(
-                                json.dumps({
-                                    "type": "status",
-                                    "status": orchestrator.get_status()
-                                }),
-                                websocket
-                            )
+                    if "type" in message_data:
+                        if message_data["type"] == "message" and "content" in message_data:
+                            # Send message to orchestrator
+                            if orchestrator:
+                                message_id = orchestrator.send_message(
+                                    message_data["content"],
+                                    message_data.get("sender", "user")
+                                )
 
-                    elif message_data["type"] == "work_logs_request":
-                        # Send work logs to client
-                        if orchestrator:
-                            limit = message_data.get("limit", 50)
-                            await manager.send_personal_message(
-                                json.dumps({
-                                    "type": "work_logs",
-                                    "logs": orchestrator.get_work_logs(limit)
-                                }),
-                                websocket
-                            )
+                                # Broadcast message to all clients
+                                await manager.broadcast(
+                                    json.dumps({
+                                        "type": "message",
+                                        "id": message_id,
+                                        "content": message_data["content"],
+                                        "sender": message_data.get("sender", "user")
+                                    })
+                                )
 
-            except json.JSONDecodeError:
-                # If not JSON, treat as plain message
-                if orchestrator:
-                    message_id = orchestrator.send_message(data, "user")
+                        elif message_data["type"] == "status_request":
+                            # Send status to client
+                            if orchestrator:
+                                await manager.send_personal_message(
+                                    json.dumps({
+                                        "type": "status",
+                                        "status": orchestrator.get_status()
+                                    }),
+                                    websocket
+                                )
 
-                    # Broadcast message to all clients
-                    await manager.broadcast(
-                        json.dumps({
-                            "type": "message",
-                            "id": message_id,
-                            "content": data,
-                            "sender": "user"
-                        })
-                    )
+                        elif message_data["type"] == "work_logs_request":
+                            # Send work logs to client
+                            if orchestrator:
+                                limit = message_data.get("limit", 50)
+                                await manager.send_personal_message(
+                                    json.dumps({
+                                        "type": "work_logs",
+                                        "logs": orchestrator.get_work_logs(limit)
+                                    }),
+                                    websocket
+                                )
 
-    except WebSocketDisconnect:
+                except json.JSONDecodeError:
+                    # If not JSON, treat as plain message
+                    if orchestrator:
+                        message_id = orchestrator.send_message(data, "user")
+
+                        # Broadcast message to all clients
+                        await manager.broadcast(
+                            json.dumps({
+                                "type": "message",
+                                "id": message_id,
+                                "content": data,
+                                "sender": "user"
+                            })
+                        )
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket client {client_id} disconnected")
+                break
+            except Exception as e:
+                logger.error(f"Error processing message from client {client_id}: {str(e)}")
+                # If we get an error processing a message, we should still continue the loop
+                # unless it's a disconnect error
+                if "disconnected" in str(e).lower() or "connection closed" in str(e).lower():
+                    logger.info(f"WebSocket client {client_id} connection lost")
+                    break
+    except Exception as e:
+        logger.error(f"Error in WebSocket connection for client {client_id}: {str(e)}")
+    finally:
+        # Always ensure we disconnect the websocket
         manager.disconnect(websocket)
+        logger.info(f"WebSocket client {client_id} cleanup complete")
 
 # Import and include route modules
 from api.routes.project_name_generator import router as project_name_router
