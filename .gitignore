@@ -102,3 +102,10 @@ venv.bak/
 
 # Screenshots directory
 screenshots/
+
+# Autobot specific
+projects/
+autobot.log
+node_modules/
+autobot/ui/dist/
+autobot/ui/node_modules/

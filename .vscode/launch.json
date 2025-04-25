@@ -1,0 +1,54 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Autobot Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": ["--api-only", "--debug"],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Frontend: Vite Dev Server",
+            "type": "node",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/ui",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "serverReadyAction": {
+                "pattern": "Local:.+(https?://\\S+)",
+                "uriFormat": "%s",
+                "action": "openExternally"
+            }
+        },
+        {
+            "name": "Debug All",
+            "type": "node",
+            "request": "launch",
+            "preLaunchTask": "start-server",
+            "cwd": "${workspaceFolder}/ui",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev"],
+            "serverReadyAction": {
+                "pattern": "Local:.+(https?://\\S+)",
+                "uriFormat": "%s",
+                "action": "openExternally"
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Server + Frontend",
+            "configurations": ["Python: Autobot Server", "Frontend: Vite Dev Server"]
+        },
+        {
+            "name": "FastAPI + Frontend",
+            "configurations": ["Python: FastAPI Only", "Frontend: Vite Dev Server"]
+        }
+    ]
+}

@@ -1,0 +1,108 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build-frontend",
+            "type": "shell",
+            "command": "cd ui && npm install && npm run build",
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "start-server",
+            "type": "process",
+            "command": "${command:python.interpreterPath}",
+            "args": ["${workspaceFolder}/main.py", "--project", "default", "--goal", "Help the user with their tasks", "--debug"],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^.*$",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*Starting agent loop.*",
+                    "endsPattern": ".*Mounted UI from.*"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "start-fastapi-only",
+            "type": "process",
+            "command": "${command:python.interpreterPath}",
+            "args": ["${workspaceFolder}/main.py", "--api-only", "--debug"],
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^.*$",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*Starting API server.*",
+                    "endsPattern": ".*Application startup complete.*"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "start-dev-frontend",
+            "type": "shell",
+            "command": "cd ui && npm install && npm run dev",
+            "isBackground": true,
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^.*$",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": ".*VITE.*",
+                    "endsPattern": ".*ready in.*"
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "build-and-run-all",
+            "dependsOrder": "sequence",
+            "dependsOn": ["build-frontend", "start-server"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "dev-mode-all",
+            "dependsOn": ["start-server", "start-dev-frontend"],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "fastapi-dev-mode",
+            "dependsOn": ["start-fastapi-only", "start-dev-frontend"],
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}
